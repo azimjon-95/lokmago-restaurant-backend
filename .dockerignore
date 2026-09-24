@@ -4,3 +4,4 @@ data
 test
 .git
 *.log
+firebase-service-account*.json
