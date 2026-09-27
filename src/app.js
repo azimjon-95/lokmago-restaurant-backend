@@ -23,9 +23,17 @@ const OrderEvent = z.object({
   restaurantId: z.string().min(1),
   orderId: z.string().min(1),
 });
+const ReminderAck = z.object({ action: z.enum(['delivered', 'in_progress']) });
+const TelegramReminderCallback = z.object({
+  restaurantId: z.string().min(1), orderId: z.string().min(1), action: z.enum(['delivered', 'in_progress']),
+});
 
-/** @param hub { emit(restaurantId, event, payload) } — Socket.IO fan-out (wired after the HTTP server exists) */
-export function createApp({ config, upstream, devices, push, hub, log = console }) {
+/**
+ * @param hub { emit(restaurantId, event, payload) } — Socket.IO fan-out (wired after the HTTP server exists)
+ * @param reminders ReminderStore — delivery-completion reminders (see src/reminders.js)
+ */
+export function createApp({ config, upstream, devices, push, hub, reminders, log = console }) {
+  reminders ??= { scheduleIfNeeded() {}, clear() {}, ack() { return false; }, stalledFor() { return []; } };
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy === 'true' ? true : Number(config.trustProxy) || false);
@@ -45,6 +53,28 @@ export function createApp({ config, upstream, devices, push, hub, log = console 
     } catch (e) { log.error('[push] yuborilmadi:', e.message); }
   }
 
+  /**
+   * Single entry point for "Yetkazildi" / "Jarayonda", used by the phone route AND the
+   * Telegram-callback webhook below — exactly one place that can complete a delivery, per
+   * TZ §7/§8/§20/§21 ("existing order action/completion service", no parallel logic here).
+   * "delivered" delegates to the SAME upstream.setStatus already used by the regular
+   * /orders/:id/status route — no new finance/payment/payout path is introduced.
+   */
+  async function reminderAck(restaurantId, orderId, action) {
+    if (action === 'in_progress') {
+      const order = await upstream.getOrder(restaurantId, orderId); // ownership check: 404 if not this restaurant's order
+      if (order.status !== 'delivering') throw BadRequest('Bu buyurtma hozir kuryerda emas');
+      reminders.ack(orderId); // just push nextReminderAt forward — does not touch order status
+      return order;
+    }
+    // "delivered": if setStatus rejects because it's already delivered/cancelled, that IS the
+    // idempotency guarantee (409 already_handled) — finance/payment/payout run at most once.
+    const order = await upstream.setStatus(restaurantId, orderId, 'delivered');
+    reminders.clear(orderId);
+    await broadcast(restaurantId, 'updated', order);
+    return order;
+  }
+
   // ---------- internal: called by lakmago-server (not by phones) ----------
   const internal = express.Router();
   const hookAuth = (req) => {
@@ -57,6 +87,19 @@ export function createApp({ config, upstream, devices, push, hub, log = console 
     const order = await upstream.getOrder(restaurantId, orderId); // source of truth is the upstream, not the webhook body
     await broadcast(restaurantId, event, order);
     res.status(202).json({ ok: true });
+  }));
+  /**
+   * Contract for the EXISTING Telegram bot (it lives in lakmago-server, not in this repo —
+   * per TZ §6/§36 we do not stand up a parallel bot here). The bot's inline-button callback
+   * should call this once it has resolved which order/restaurant it's for; this endpoint does
+   * not trust that resolution — order ownership is re-checked against `restaurantId` here
+   * (TZ §27) via the same upstream lookup every other route uses.
+   */
+  internal.post('/telegram/reminder-callback', wrap(async (req, res) => {
+    hookAuth(req);
+    const { restaurantId, orderId, action } = parse(TelegramReminderCallback, req.body);
+    const order = await reminderAck(restaurantId, orderId, action);
+    res.json({ ok: true, order });
   }));
   if (config.env !== 'production' && upstream.createOrder) {
     // dev helper: spawn several simultaneous orders to try the queue
@@ -108,9 +151,22 @@ export function createApp({ config, upstream, devices, push, hub, log = console 
     const { status } = parse(StatusBody, req.body);
     if (status === 'pending') throw BadRequest('Noto\'g\'ri holat');
     const order = status === 'accepted' ? await upstream.accept(rid(req), req.params.id) : await upstream.setStatus(rid(req), req.params.id, status);
+    // Reminder scheduling rides along with the EXISTING status transition — no new status,
+    // no new completion path. "delivering" = handed to courier (TZ §4); leaving it (delivered,
+    // or anything else) clears the timer.
+    if (order.status === 'delivering') reminders.scheduleIfNeeded(rid(req), order.id);
+    else reminders.clear(order.id);
     await broadcast(rid(req), 'updated', order);
     res.json(order);
   }));
+
+  // "Yetkazildi" / "Jarayonda" from a reminder notification (FCM/Socket.IO tap or Telegram-style
+  // in-app button). Delegates entirely to reminderAck() above — same completion path as /status.
+  secured.post('/orders/:id/reminder/ack', wrap(async (req, res) => {
+    const { action } = parse(ReminderAck, req.body);
+    res.json(await reminderAck(rid(req), req.params.id, action));
+  }));
+  secured.get('/reminders/stalled', wrap(async (req, res) => res.json(reminders.stalledFor(rid(req)))));
 
   secured.get('/stats/today', wrap(async (req, res) => res.json(await upstream.stats(rid(req)))));
 

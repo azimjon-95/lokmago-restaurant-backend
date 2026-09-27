@@ -4,7 +4,10 @@ import { start } from '../src/server.js';
 export const baseConfig = (over = {}) => ({
   env: 'test', port: 0, jwtSecret: 'test-secret-test-secret', jwtTtl: '1h', upstreamMode: 'mock',
   gateway: { url: '', password: '', header: 'x-gateway-password' }, inboundPassword: '', trustProxy: '0',
-  webhookSecret: 'hook-secret', firebase: {}, corsOrigins: [], deviceStoreFile: '',
+  webhookSecret: 'hook-secret', firebase: {}, corsOrigins: [], deviceStoreFile: '', reminderStoreFile: '',
+  // tickSeconds huge so the real interval never fires during a test run — tests call
+  // t.scheduler.tick(customNow) directly to simulate elapsed time deterministically.
+  reminder: { delayMinutes: 30, repeatMinutes: 30, maxCount: 3, tickSeconds: 3600 },
   android: { minimumVersion: '1.0.0', latestVersion: '1.0.1', forceUpdate: false }, ...over,
 });
 
@@ -12,6 +15,7 @@ export class FakePush {
   enabled = true; sent = [];
   async orderNew(rid, order) { this.sent.push({ rid, type: 'order_new', id: order.id }); }
   async orderChanged(rid, order, type = 'order_updated') { this.sent.push({ rid, type, id: order.id }); }
+  async deliveryReminder(rid, order, reminderCount) { this.sent.push({ rid, type: 'order_delivery_reminder', id: order.id, reminderCount }); }
 }
 
 const silent = { log() {}, warn() {}, error() {} };

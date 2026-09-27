@@ -28,6 +28,14 @@ export class Push {
   async orderChanged(restaurantId, order, type = 'order_updated') {
     return this.#send(restaurantId, { type, orderId: order.id });
   }
+  /** Delivery-completion reminder (TZ §19, §23) — data-only, same as the other order pushes. */
+  async deliveryReminder(restaurantId, order, reminderCount) {
+    return this.#send(restaurantId, {
+      type: 'order_delivery_reminder', orderId: order.id, reminderCount: String(reminderCount),
+      title: '🚴 Buyurtma yetkazildimi?',
+      body: `Buyurtma №${order.number} hali yakunlanmagan.`,
+    });
+  }
 
   async #send(restaurantId, data) {
     if (!this.messaging) return { sent: 0 };

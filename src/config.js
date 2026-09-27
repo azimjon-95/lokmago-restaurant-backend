@@ -18,6 +18,13 @@ export const config = {
   firebase: { file: env('FIREBASE_SERVICE_ACCOUNT_FILE'), base64: env('FIREBASE_SERVICE_ACCOUNT_BASE64') },
   corsOrigins: env('CORS_ORIGINS').split(',').map((s) => s.trim()).filter(Boolean),
   deviceStoreFile: env('DEVICE_STORE_FILE'),
+  reminderStoreFile: env('REMINDER_STORE_FILE'),
+  reminder: {
+    delayMinutes: Number(env('REMINDER_DELAY_MINUTES', '30')),
+    repeatMinutes: Number(env('REMINDER_REPEAT_MINUTES', '30')),
+    maxCount: Number(env('REMINDER_MAX_COUNT', '3')),
+    tickSeconds: Number(env('REMINDER_TICK_SECONDS', '30')),
+  },
   android: {
     minimumVersion: env('ANDROID_MIN_VERSION', '1.0.0'),
     latestVersion: env('ANDROID_LATEST_VERSION', '1.0.0'),
@@ -34,5 +41,9 @@ export function assertConfig(c = config) {
     if (!c.webhookSecret) errors.push('INTERNAL_WEBHOOK_SECRET majburiy');
   }
   if (c.upstreamMode === 'gateway' && !c.gateway.url) errors.push('API_GATEWAY_URL majburiy (UPSTREAM_MODE=gateway)');
+  const { delayMinutes, repeatMinutes, maxCount, tickSeconds } = c.reminder;
+  if (![delayMinutes, repeatMinutes, maxCount, tickSeconds].every((n) => Number.isFinite(n) && n > 0)) {
+    errors.push('REMINDER_* qiymatlari musbat son bo\'lishi kerak');
+  }
   if (errors.length) throw new Error('Config xatosi:\n - ' + errors.join('\n - '));
 }
