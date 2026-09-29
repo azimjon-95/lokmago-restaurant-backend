@@ -21,7 +21,9 @@ test('gateway password is enforced on REST and socket when configured', async ()
 test('production refuses mock upstream and weak secrets', () => {
   assert.throws(() => assertConfig(baseConfig({ env: 'production' })), /mock/);
   assert.throws(() => assertConfig(baseConfig({ jwtSecret: 'short' })), /JWT_SECRET/);
-  assert.doesNotThrow(() => assertConfig(baseConfig({ env: 'production', upstreamMode: 'gateway', gateway: { url: 'https://g', password: 'x', header: 'h' } })));
+  assert.doesNotThrow(() => assertConfig(baseConfig({ env: 'production', upstreamMode: 'gateway', gateway: { url: 'https://g', password: 'k'.repeat(24), header: 'h' } })));
+  assert.throws(() => assertConfig(baseConfig({ env: 'production', upstreamMode: 'gateway', gateway: { url: 'https://g', password: 'short', header: 'h' } })), /API_GATEWAY_PASSWORD/);
+  assert.throws(() => assertConfig(baseConfig({ env: 'production', upstreamMode: 'gateway', gateway: { url: 'http://g', password: 'k'.repeat(24), header: 'h' } })), /https/);
 });
 
 test('dev helper endpoint does not exist in production', async () => {

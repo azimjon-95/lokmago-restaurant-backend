@@ -19,7 +19,7 @@ const StatusBody = z.object({ status: z.enum(STATUS) });
 const Device = z.object({ token: z.string().min(10).max(4096), deviceId: z.string().min(4).max(128), platform: z.string().default('android') });
 const Listing = z.object({ status: z.enum(STATUS).optional(), limit: z.coerce.number().int().min(1).max(200).default(50) });
 const OrderEvent = z.object({
-  event: z.enum(['created', 'updated', 'cancelled']),
+  event: z.string().trim().min(1).max(40), // created | updated | cancelled | delivered ... anything else is treated as "updated"
   restaurantId: z.string().min(1),
   orderId: z.string().min(1),
 });
@@ -45,7 +45,19 @@ export function createApp({ config, upstream, devices, push, hub, reminders, log
   app.get('/health', health);
 
   /** Tell every phone of the restaurant over both channels; a failing channel never breaks the other. */
+  const lastSig = new Map();   // orderId -> { status, at }: lets us drop the server's echo of OUR OWN change
+  const seenEvents = new Set(); // x-event-id: the server delivers at-least-once
+  const remember = (set, key, max = 2000) => { set.add(key); if (set.size > max) set.delete(set.values().next().value); };
+
+  /** A delivery order is "handed over" while status=delivering, whoever moved it there (our route, courier link, bot). */
+  function syncReminder(restaurantId, order) {
+    if (order.status === 'delivering' && order.fulfillment === 'delivery') reminders.scheduleIfNeeded(restaurantId, order.id);
+    else reminders.clear(order.id);
+  }
+
   async function broadcast(restaurantId, event, order) {
+    lastSig.set(order.id, { status: order.status, at: Date.now() });
+    if (lastSig.size > 2000) lastSig.delete(lastSig.keys().next().value);
     hub.emit(restaurantId, event === 'created' ? 'order:new' : 'order:updated', order);
     try {
       if (event === 'created') await push.orderNew(restaurantId, order);
@@ -84,9 +96,21 @@ export function createApp({ config, upstream, devices, push, hub, reminders, log
   internal.post('/orders/events', wrap(async (req, res) => {
     hookAuth(req);
     const { event, restaurantId, orderId } = parse(OrderEvent, req.body);
-    const order = await upstream.getOrder(restaurantId, orderId); // source of truth is the upstream, not the webhook body
-    await broadcast(restaurantId, event, order);
-    res.status(202).json({ ok: true });
+    const eventId = String(req.headers['x-event-id'] ?? '');
+    if (eventId && seenEvents.has(eventId)) return res.status(202).json({ ok: true, duplicate: true });
+    let order;
+    try { order = await upstream.getOrder(restaurantId, orderId); } // source of truth is the upstream, not the webhook body
+    catch (e) {
+      if (e instanceof HttpError && e.status === 404) { reminders.clear(orderId); return res.status(202).json({ ok: true, ignored: true }); } // hidden/unknown order: do not make the server retry
+      throw e; // upstream trouble -> non-2xx -> the server retries (12 attempts)
+    }
+    syncReminder(restaurantId, order);
+    const kind = event === 'created' ? 'created' : event === 'cancelled' ? 'cancelled' : 'updated';
+    const prev = lastSig.get(order.id);
+    const echo = kind === 'updated' && prev && prev.status === order.status && Date.now() - prev.at < 60_000;
+    if (!echo) await broadcast(restaurantId, kind, order);
+    if (eventId) remember(seenEvents, eventId);
+    res.status(202).json({ ok: true, ...(echo ? { echo: true } : {}) });
   }));
   /**
    * Contract for the EXISTING Telegram bot (it lives in lakmago-server, not in this repo —
@@ -124,7 +148,7 @@ export function createApp({ config, upstream, devices, push, hub, reminders, log
   api.get('/app/version', (_req, res) => res.json({ android: config.android }));
 
   api.post('/auth/login',
-    rateLimit({ windowMs: 15 * 60_000, limit: config.env === 'test' ? 1000 : 20, standardHeaders: true, legacyHeaders: false, skipSuccessfulRequests: true,
+    rateLimit({ windowMs: 15 * 60_000, limit: config.env === 'test' ? 1000 : 5, // the server's IP limiter is 10 failures/15min for the WHOLE BFF; stay below it standardHeaders: true, legacyHeaders: false, skipSuccessfulRequests: true,
       message: { error: 'Juda ko\'p urinish. Keyinroq qayta urining', code: 'rate_limited' } }),
     wrap(async (req, res) => {
       const { login, password } = parse(Login, req.body);
@@ -154,8 +178,7 @@ export function createApp({ config, upstream, devices, push, hub, reminders, log
     // Reminder scheduling rides along with the EXISTING status transition — no new status,
     // no new completion path. "delivering" = handed to courier (TZ §4); leaving it (delivered,
     // or anything else) clears the timer.
-    if (order.status === 'delivering') reminders.scheduleIfNeeded(rid(req), order.id);
-    else reminders.clear(order.id);
+    syncReminder(rid(req), order);
     await broadcast(rid(req), 'updated', order);
     res.json(order);
   }));
@@ -187,7 +210,7 @@ export function createApp({ config, upstream, devices, push, hub, reminders, log
   app.use((_req, _res, next) => next(NotFound('Topilmadi')));
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
-    if (err instanceof HttpError) return res.status(err.status).json({ error: err.message, code: err.code });
+    if (err instanceof HttpError) return res.status(err.status).json({ error: err.message, code: err.code, ...(err.details ?? {}) });
     if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSON noto\'g\'ri', code: 'bad_request' });
     log.error('[error]', err);
     res.status(500).json({ error: 'Ichki xatolik', code: 'internal' });

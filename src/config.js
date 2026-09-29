@@ -10,9 +10,10 @@ export const config = {
   gateway: {
     url: env('API_GATEWAY_URL').replace(/\/+$/, ''),
     password: env('API_GATEWAY_PASSWORD'),
-    header: env('API_GATEWAY_HEADER', 'x-gateway-password'),
+    header: env('API_GATEWAY_HEADER', 'x-gateway-key'), // OUTBOUND: service key sent to lakmago-server /app/service/...
   },
   inboundPassword: env('GATEWAY_INBOUND_PASSWORD'),
+  inboundHeader: env('GATEWAY_INBOUND_HEADER', 'x-gateway-password'), // INBOUND: what the Android app sends
   trustProxy: env('TRUST_PROXY', '1'),
   webhookSecret: env('INTERNAL_WEBHOOK_SECRET'),
   firebase: { file: env('FIREBASE_SERVICE_ACCOUNT_FILE'), base64: env('FIREBASE_SERVICE_ACCOUNT_BASE64') },
@@ -40,7 +41,12 @@ export function assertConfig(c = config) {
     if (c.upstreamMode === 'mock') errors.push('production\'da UPSTREAM_MODE=mock ruxsat etilmaydi');
     if (!c.webhookSecret) errors.push('INTERNAL_WEBHOOK_SECRET majburiy');
   }
-  if (c.upstreamMode === 'gateway' && !c.gateway.url) errors.push('API_GATEWAY_URL majburiy (UPSTREAM_MODE=gateway)');
+  if (c.upstreamMode === 'gateway') {
+    if (!c.gateway.url) errors.push('API_GATEWAY_URL majburiy (UPSTREAM_MODE=gateway)');
+    if (c.env === 'production' && !c.gateway.url.startsWith('https://')) errors.push('API_GATEWAY_URL production\'da https bo\'lishi shart');
+    // lakmago-server refuses the service route unless the key is >= 24 chars (fail-closed), so fail here first.
+    if (c.env === 'production' && (c.gateway.password || '').length < 24) errors.push('API_GATEWAY_PASSWORD (servis kaliti, GATEWAY_SERVICE_KEY) kamida 24 belgi bo\'lishi kerak');
+  }
   const { delayMinutes, repeatMinutes, maxCount, tickSeconds } = c.reminder;
   if (![delayMinutes, repeatMinutes, maxCount, tickSeconds].every((n) => Number.isFinite(n) && n > 0)) {
     errors.push('REMINDER_* qiymatlari musbat son bo\'lishi kerak');

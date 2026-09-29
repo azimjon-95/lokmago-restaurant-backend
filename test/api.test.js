@@ -110,7 +110,8 @@ test('webhook: requires secret; unknown order/restaurant pair is not broadcast',
   const id = (await t.spawn('r1')).body.created[0];
   t.fakePush.sent.length = 0;
   const r = await t.api('POST', '/internal/orders/events', { headers: { 'x-webhook-secret': 'hook-secret' }, body: { event: 'created', restaurantId: 'r2', orderId: id } });
-  assert.equal(r.status, 404);
+  assert.equal(r.status, 202); // unknown/hidden pair: acknowledged (so the server stops retrying) but NOT broadcast
+  assert.equal(r.body.ignored, true);
   assert.equal(t.fakePush.sent.length, 0);
 });
 

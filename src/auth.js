@@ -28,7 +28,7 @@ export function requireAuth(cfg) {
 export function gatewayGuard(cfg) {
   return (req, _res, next) => {
     if (!cfg.inboundPassword) return next();
-    const got = req.headers[cfg.gateway.header.toLowerCase()];
+    const got = req.headers[cfg.inboundHeader.toLowerCase()];
     return typeof got === 'string' && safeEqual(got, cfg.inboundPassword) ? next() : next(Unauthorized('Gateway paroli noto\'g\'ri'));
   };
 }

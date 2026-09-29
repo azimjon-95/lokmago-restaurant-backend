@@ -28,7 +28,7 @@ export async function start({ config = envConfig, push, log = console, upstream,
   const server = http.createServer(app);
   realtime = createRealtime(server, {
     jwtSecret: config.jwtSecret, corsOrigins: config.corsOrigins,
-    gatewayPassword: config.inboundPassword, gatewayHeader: config.gateway.header,
+    gatewayPassword: config.inboundPassword, gatewayHeader: config.inboundHeader,
   });
   const scheduler = createReminderScheduler({ reminders, upstream, hub, push, log, tickMs: config.reminder.tickSeconds * 1000 });
   scheduler.start(); // survives server restarts because ReminderStore is persisted, not in-memory-only

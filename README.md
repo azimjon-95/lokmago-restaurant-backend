@@ -37,7 +37,7 @@ Lokal sinov uchun `.env` da `NODE_ENV=development`, `UPSTREAM_MODE=mock` qo'ying
 
 | | |
 |---|---|
-| `POST auth/login` | `{login,password}` → `{token,user,restaurant}` |
+| `POST auth/login` | `{login: restoranId, password: PIN}` → `{token,user,restaurant}` (serverda foydalanuvchi akkauntlari yo'q, PIN restoran bo'yicha) |
 | `GET orders/pending` | Kutayotgan buyurtmalar (eskisi birinchi) — ilova ochilganda tiklash |
 | `GET orders?status=&limit=` · `GET orders/:id` | Faqat o'z restoraniniki, aks holda `404` |
 | `POST orders/:id/accept` | Atomik. Yutqazgan qurilma `409 already_handled` oladi |
@@ -87,8 +87,23 @@ curl -X POST $BFF/internal/orders/events \
 
 Servis orderni upstream'dan qayta o'qiydi (webhook tanasiga ishonilmaydi), so'ng Socket.IO **va** FCM orqali yuboradi.
 
-> ⚠️ `src/upstream/gateway.js` dagi `ROUTES` va `mapOrder()` — **taxminiy** yo'llar. TZ 22-band bo'yicha
-> `lakmago-server` endpointlari audit qilingach faqat shu fayl moslanadi.
+### lakmago-server bilan ulanish (`src/upstream/gateway.js`)
+
+Shartnoma: `lakmago-server` → `deploy/GATEWAY-BFF.md` (commit `2948fb1`). Adapter faqat shu faylda:
+
+| BFF | lakmago-server |
+|---|---|
+| `auth/login` (restoranId + PIN) | `GET /app/{pin}/{restaurantId}/` — PIN faqat login paytida URL'da, saqlanmaydi va logga chiqmaydi |
+| `orders`, `orders/pending`, `orders/:id` | `GET /app/service/{rid}/orders[?status=]`, `/orders/:id` (header `x-gateway-key`) |
+| `orders/:id/accept`, `status` | `PATCH .../orders/:id/status`. Ketma-ket takror `200 changed:false`; haqiqiy poyga `409 RACE_LOST` → `409 already_handled` |
+| delivery buyurtmada `delivered` | `POST .../orders/:id/confirm-delivered` (botdagi «Yakunlandi» bilan bir xil funksiya, komissiya bir marta). Erta bo'lsa `409 confirm_too_early` + `eligibleAt` |
+
+Xavfsizlik qarorlari:
+* `mapOrder()` — **ruxsat ro'yxati**: xom hujjatdagi `finance`, mijoz hamyoni/kartalari, soxta `courierName`, `telegramId`, payout telefonga chiqmaydi.
+* Serverning **bizning kalitni** rad etishi (`401/403`) ilovaga `502 upstream_auth` bo'lib boradi, hech qachon `401` emas (aks holda hamma telefon logout bo'lib ketadi).
+* Login limiti `5/15 daqiqa` — serverning IP limiti (10 xato/15 daqiqa) butun BFF uchun bitta ekanini hisobga olib.
+* Webhook: `x-event-id` bo'yicha takrorlar tashlanadi (server at-least-once), o'z o'zgarishimizning aks-sadosi (echo) qayta yuborilmaydi, ko'rinmas (zal/to'lanmagan) buyurtma `202 ignored` bilan tasdiqlanadi (server qayta urinmasligi uchun). Buyurtma BFF'dan tashqarida (kuryer havolasi, bot) `delivering` bo'lsa ham eslatma kuzatuvi boshlanadi.
+* **Statistika hali ulanmagan** (`501 not_implemented`): serverning `/stats` va `/orders/history` JSON shakli hali bizda yo'q. Jimgina 0 ko'rsatmaslik uchun ataylab shunday.
 
 Dev'da bir necha buyurtmani birdan yaratish (navbatni sinash): `POST /internal/dev/orders {"restaurantId":"r1","count":6}`
 (`x-webhook-secret` bilan; production'da mavjud emas).

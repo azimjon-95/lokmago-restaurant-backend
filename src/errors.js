@@ -1,5 +1,5 @@
 export class HttpError extends Error {
-  constructor(status, message, code) { super(message); this.status = status; this.code = code; }
+  constructor(status, message, code, details) { super(message); this.status = status; this.code = code; this.details = details; }
 }
 export const NotFound = (m = 'Buyurtma topilmadi') => new HttpError(404, m, 'not_found');
 export const Conflict = (m = 'Buyurtma allaqachon qabul qilingan') => new HttpError(409, m, 'already_handled');

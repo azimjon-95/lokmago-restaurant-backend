@@ -3,7 +3,7 @@ import { start } from '../src/server.js';
 
 export const baseConfig = (over = {}) => ({
   env: 'test', port: 0, jwtSecret: 'test-secret-test-secret', jwtTtl: '1h', upstreamMode: 'mock',
-  gateway: { url: '', password: '', header: 'x-gateway-password' }, inboundPassword: '', trustProxy: '0',
+  gateway: { url: '', password: '', header: 'x-gateway-key' }, inboundPassword: '', inboundHeader: 'x-gateway-password', trustProxy: '0',
   webhookSecret: 'hook-secret', firebase: {}, corsOrigins: [], deviceStoreFile: '', reminderStoreFile: '',
   // tickSeconds huge so the real interval never fires during a test run — tests call
   // t.scheduler.tick(customNow) directly to simulate elapsed time deterministically.
