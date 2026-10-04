@@ -17,7 +17,7 @@ import { createReminderScheduler } from './scheduler.js';
  */
 export async function start({ config = envConfig, push, log = console, upstream, devices, reminders } = {}) {
   assertConfig(config);
-  upstream ??= config.upstreamMode === 'mock' ? new MockUpstream() : new GatewayUpstream(config.gateway);
+  upstream ??= config.upstreamMode === 'mock' ? new MockUpstream() : new GatewayUpstream({ ...config.gateway, authMode: config.authMode });
   devices ??= new DeviceStore(config.deviceStoreFile);
   push ??= new Push(config.firebase, devices, log);
   reminders ??= new ReminderStore(config.reminderStoreFile, config.reminder);

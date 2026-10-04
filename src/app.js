@@ -147,20 +147,27 @@ export function createApp({ config, upstream, devices, push, hub, reminders, log
   api.get('/health', health);
   api.get('/app/version', (_req, res) => res.json({ android: config.android }));
 
+  // The main server's own IP limiter is 10 failures / 15 min for the WHOLE BFF (we are one IP), so stay below it.
+  // Only FAILED attempts count: a restaurant that logs in successfully must never lock the others out.
   api.post('/auth/login',
-    rateLimit({ windowMs: 15 * 60_000, limit: config.env === 'test' ? 1000 : 5, // the server's IP limiter is 10 failures/15min for the WHOLE BFF; stay below it standardHeaders: true, legacyHeaders: false, skipSuccessfulRequests: true,
+    rateLimit({ windowMs: 15 * 60_000, limit: config.env === 'test' ? 1000 : 5, standardHeaders: true, legacyHeaders: false, skipSuccessfulRequests: true,
       message: { error: 'Juda ko\'p urinish. Keyinroq qayta urining', code: 'rate_limited' } }),
     wrap(async (req, res) => {
       const { login, password } = parse(Login, req.body);
       const r = await upstream.authenticate(login, password);
       if (!r) throw Unauthorized();
       const token = signToken(config, { userId: String(r.user.id), restaurantId: String(r.restaurant.id) });
-      res.json({ token, user: r.user, restaurant: r.restaurant });
+      // The app requires user.login; never rely on the upstream to provide it.
+      res.json({ token, user: { ...r.user, login: r.user.login ?? login }, restaurant: r.restaurant });
     }));
 
   const secured = express.Router();
   secured.use(requireAuth(config));
   const rid = (req) => req.auth.restaurantId; // ALWAYS from the verified token
+
+  // Sliding session: the app calls this on start (at most once a day). A restaurant that uses the app keeps its
+  // session alive; one that is gone for JWT_TTL has to log in again. restaurantId is copied from the VERIFIED token.
+  secured.post('/auth/refresh', (req, res) => res.json({ token: signToken(config, { userId: req.auth.userId, restaurantId: rid(req) }) }));
 
   secured.get('/orders/pending', wrap(async (req, res) => res.json(await upstream.listOrders(rid(req), { status: 'pending', limit: 200 }))));
   secured.get('/orders', wrap(async (req, res) => res.json(await upstream.listOrders(rid(req), parse(Listing, req.query)))));

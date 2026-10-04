@@ -18,29 +18,43 @@ before(async () => {
   fake = await startFakeServer();
   push = new FakePush();
   const config = baseConfig({ upstreamMode: 'gateway', gateway: { url: fake.url, password: KEY, header: 'x-gateway-key' } });
-  bff = await start({ config, push, log: { log() {}, warn() {}, error() {} }, upstream: new GatewayUpstream(config.gateway) });
+  bff = await start({ config, push, log: { log() {}, warn() {}, error() {} }, upstream: new GatewayUpstream({ ...config.gateway, authMode: 'credentials' }) });
   url = `http://127.0.0.1:${bff.port}`;
-  token = (await api('POST', `${V}/auth/login`, { body: { login: RID, password: '1234' }, headers: { noauth: 1 } })).body.token;
+  token = (await api('POST', `${V}/auth/login`, { body: { login: 'totli', password: 'parol123' }, headers: { noauth: 1 } })).body.token;
 });
 after(async () => { await bff.close(); await fake.close(); });
 
-test('login = restaurantId + PIN: ok -> JWT, profile secrets never returned', async () => {
-  const r = await api('POST', `${V}/auth/login`, { body: { login: RID, password: '1234' }, headers: { noauth: 1 } });
+test('login = restaurant\'s own login + password: ok -> JWT with restaurantId inside, no secrets in the response', async () => {
+  const r = await api('POST', `${V}/auth/login`, { body: { login: 'totli', password: 'parol123' }, headers: { noauth: 1 } });
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.restaurant, { id: RID, name: 'TOTLI' });
-  const dump = JSON.stringify(r.body);
-  assert.ok(!/payout|8600|deliveryMarkup|pinHash/.test(dump));
+  assert.equal(r.body.user.login, 'totli'); // the Android DTO requires user.login
+  assert.ok(!/passwordHash|must-never/.test(JSON.stringify(r.body)));
+  const payload = JSON.parse(Buffer.from(r.body.token.split('.')[1], 'base64url').toString());
+  assert.equal(payload.rid, RID); // restaurantId comes from the server's answer, never from the request
 });
 
-test('login: wrong PIN / unknown restaurant -> same 401; malformed id never reaches the server; blocked PIN -> 429 with retryAfter', async () => {
+test('login: wrong password -> 401; blocked login -> 429 login_blocked + retryAfter; a refused service key is a 502, NOT "wrong password"', async () => {
   const login = (l, p) => api('POST', `${V}/auth/login`, { body: { login: l, password: p }, headers: { noauth: 1 } });
-  assert.equal((await login(RID, '0000')).status, 401);
-  assert.equal((await login(OTHER_RID, '1234')).status, 401);
+  assert.equal((await login('totli', 'xato')).status, 401);
+  assert.equal((await login('yoq-odam', 'parol123')).status, 401);
+  const blocked = await login('blocked', 'x');
+  assert.equal(blocked.status, 429); assert.equal(blocked.body.code, 'login_blocked'); assert.equal(blocked.body.retryAfter, 30);
+  const wrongKey = new GatewayUpstream({ url: fake.url, password: 'z'.repeat(24), header: 'x-gateway-key', authMode: 'credentials' });
+  await assert.rejects(wrongKey.authenticate('totli', 'parol123'), (e) => e.status === 502 && e.code === 'upstream_auth');
+});
+
+test('AUTH_MODE=pin (restaurantId + PIN) still works: ok / wrong / unknown id / malformed id never reaches the server / blocked', async () => {
+  const pin = new GatewayUpstream({ url: fake.url, password: KEY, header: 'x-gateway-key', authMode: 'pin' });
+  const ok = await pin.authenticate(RID, '1234');
+  assert.deepEqual(ok.restaurant, { id: RID, name: 'TOTLI' }); assert.equal(ok.user.login, RID);
+  assert.ok(!/payout|8600|deliveryMarkup|pinHash/.test(JSON.stringify(ok)));
+  assert.equal(await pin.authenticate(RID, '0000'), null);
+  assert.equal(await pin.authenticate(OTHER_RID, '1234'), null);
   const before = fake.stats.requests.length;
-  assert.equal((await login('../../etc', '1234')).status, 401);
+  assert.equal(await pin.authenticate('../../etc', '1234'), null);
   assert.equal(fake.stats.requests.length, before);
-  const blocked = await login(RID, '9999');
-  assert.equal(blocked.status, 429); assert.equal(blocked.body.code, 'pin_blocked'); assert.equal(blocked.body.retryAfter, 30);
+  await assert.rejects(pin.authenticate(RID, '9999'), (e) => e.status === 429 && e.code === 'pin_blocked' && e.retryAfter === undefined && e.details.retryAfter === 30);
 });
 
 test('order mapping is an allow-list: no finance, customer wallet, courier placeholder, telegram id', async () => {
@@ -109,7 +123,7 @@ test('OUR service key rejected by the server is a 502, never a 401 (a 401 would 
 test('the PIN never appears in errors or in service-route requests', async () => {
   const svc = fake.stats.requests.filter((r) => r.path.includes('/service/'));
   assert.ok(svc.length > 5);
-  assert.ok(svc.every((r) => !r.path.includes('1234'))); // PIN is only ever used on the login route
+  assert.ok(svc.every((r) => !r.path.includes('1234') && !r.path.includes('parol123'))); // secrets never travel in a URL
   assert.ok(svc.filter((r) => r.key === KEY).length > 5);
 });
 

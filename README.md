@@ -37,7 +37,8 @@ Lokal sinov uchun `.env` da `NODE_ENV=development`, `UPSTREAM_MODE=mock` qo'ying
 
 | | |
 |---|---|
-| `POST auth/login` | `{login: restoranId, password: PIN}` → `{token,user,restaurant}` (serverda foydalanuvchi akkauntlari yo'q, PIN restoran bo'yicha) |
+| `POST auth/login` | `{login, password}` → `{token,user,restaurant}`. Nimani anglatishi `AUTH_MODE`ga bog'liq (pastga qarang) |
+| `POST auth/refresh` | Joriy token yaroqli bo'lsa yangisini beradi (sliding sessiya, ilova kuniga ko'pi bilan 1 marta chaqiradi). Parol telefonda saqlanmaydi |
 | `GET orders/pending` | Kutayotgan buyurtmalar (eskisi birinchi) — ilova ochilganda tiklash |
 | `GET orders?status=&limit=` · `GET orders/:id` | Faqat o'z restoraniniki, aks holda `404` |
 | `POST orders/:id/accept` | Atomik. Yutqazgan qurilma `409 already_handled` oladi |
@@ -86,6 +87,23 @@ curl -X POST $BFF/internal/orders/events \
 ```
 
 Servis orderni upstream'dan qayta o'qiydi (webhook tanasiga ishonilmaydi), so'ng Socket.IO **va** FCM orqali yuboradi.
+
+### Login rejimlari (`AUTH_MODE`)
+
+| Rejim | `login` | `password` | Server tomonda nima kerak |
+|---|---|---|---|
+| `pin` (hozirgi default) | Restoran ID | PIN | mavjud `GET /app/{pin}/{restaurantId}/` — tayyor |
+| `credentials` | restoranning o'z logini | restoranning o'z paroli | **yangi** `POST /app/service/auth/login` (pastda) |
+
+**`credentials` uchun main server shartnomasi** (servis kaliti sarlavhasi bilan, IP ro'yxatidan o'tgan):
+```
+POST /app/service/auth/login        { "login": "...", "password": "..." }
+200  { "restaurantId": "<24 hex>", "name": "TOTLI" }      // boshqa hech narsa: hash, payout, telefon YO'Q
+401  { "code": "INVALID_CREDENTIALS" }
+429  { "code": "LOGIN_BLOCKED", "retryAfter": 30 }       // blok LOGIN bo'yicha, IP bo'yicha emas (BFF bitta IP)
+```
+Serverning kalit/IP xatosi (`401/404` kodsiz) BFF'da `502` bo'lib ko'rinadi — hech qachon "parol noto'g'ri" emas.
+Sessiya: JWT (`JWT_TTL`, default 30 kun) + `auth/refresh`. Restoran paroli serverda o'zgarsa, eski token muddati tugaguncha amal qiladi.
 
 ### lakmago-server bilan ulanish (`src/upstream/gateway.js`)
 

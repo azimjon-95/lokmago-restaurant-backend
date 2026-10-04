@@ -46,6 +46,11 @@ export function startFakeServer() {
         return send(res, 200, { _id: RID, name: 'TOTLI', payout: { card: '8600 1234 5678 9012' }, deliveryMarkupPercent: 7, pinHash: 'x' });
       }
       if (req.headers['x-gateway-key'] !== KEY) return send(res, 401, { error: 'Kalit noto\'g\'ri' });
+      if (p[2] === 'auth' && p[3] === 'login' && req.method === 'POST') {
+        if (body.login === 'blocked') return send(res, 429, { error: 'Bloklandi', code: 'LOGIN_BLOCKED', retryAfter: 30 });
+        if (body.login === 'totli' && body.password === 'parol123') return send(res, 200, { restaurantId: RID, name: 'TOTLI', passwordHash: 'must-never-reach-the-phone' });
+        return send(res, 401, { error: 'Login yoki parol noto\'g\'ri', code: 'INVALID_CREDENTIALS' });
+      }
       const rid = p[2];
       if (rid !== RID) return send(res, 404, { error: 'Gateway topilmadi' });
       const [, , , what, id, action] = p;

@@ -12,6 +12,9 @@ import { HttpError, Conflict, NotFound, BadRequest } from '../errors.js';
  *       PATCH /orders/:id/status       {status}      -> order + { changed }
  *       POST  /orders/:id/confirm-delivered          -> restaurant closes a DELIVERY order (>= 30 min rule)
  *
+ *   credentials login      : POST {url}/app/service/auth/login  {login,password} -> { restaurantId, name }   (AUTH_MODE=credentials)
+ *       200 ok | 401 {code:'INVALID_CREDENTIALS'} | 429 {code:'LOGIN_BLOCKED', retryAfter}   (lock per login, not per IP)
+ *
  * Security notes
  *  - The PIN travels in the URL only during login and is never stored, logged or put into an error message.
  *  - Raw server documents carry internal finance, customer wallets, courier placeholders, payout data.
@@ -94,19 +97,47 @@ export class GatewayUpstream {
 
   async #ok(path, opts) { const r = await this.#fetch(path, opts); if (!r.res.ok) throw this.#fail(r); return r.data; }
 
-  /**
-   * Login = restaurantId + PIN (the server has no user accounts). The PIN is verified by the server's
-   * own PIN route (so its 3-strikes lock applies); we only learn "ok / wrong / blocked".
-   * Returns null for wrong credentials. Never returns the raw profile (it contains payout details).
-   */
+  /** AUTH_MODE decides how a restaurant proves who it is. Both return null for wrong credentials. */
   async authenticate(login, password) {
+    return this.cfg.authMode === 'credentials' ? this.#authCredentials(login, password) : this.#authPin(login, password);
+  }
+
+  /**
+   * The restaurant's OWN login + password, verified by the main server (it owns the accounts and the hashes).
+   * We only learn ok / wrong / blocked. The password is forwarded once, over HTTPS, and never stored or logged.
+   */
+  async #authCredentials(login, password) {
+    const l = String(login ?? '').trim();
+    const p = String(password ?? '');
+    if (!l || l.length > 100 || !p || p.length > 200) return null;
+    const { res, data } = await this.#fetch('/app/service/auth/login', { method: 'POST', body: { login: l, password: p } });
+    const code = String(data?.code ?? '').toUpperCase();
+    if (res.ok) {
+      const restaurantId = String(data?.restaurantId ?? data?._id ?? '');
+      if (!ID.test(restaurantId)) throw new HttpError(502, 'Asosiy server kutilmagan javob berdi', 'upstream_bad_response');
+      const name = data?.name ?? data?.restaurantName ?? 'Restoran';
+      return { user: { id: restaurantId, login: l }, restaurant: { id: restaurantId, name } };
+    }
+    if (res.status === 401 && code === 'INVALID_CREDENTIALS') return null;
+    if (res.status === 429 && code === 'LOGIN_BLOCKED') {
+      throw new HttpError(429, `Kirish vaqtincha bloklandi. ${data?.retryAfter ?? 30} soniyadan keyin urinib ko'ring`, 'login_blocked', { retryAfter: data?.retryAfter ?? 30 });
+    }
+    throw this.#fail({ res, data }); // anything else (wrong service key, missing route ...) is OUR problem -> 502, never "wrong password"
+  }
+
+  /**
+   * AUTH_MODE=pin: login = restaurantId, password = PIN (the server has a PIN per restaurant).
+   * The PIN is verified by the server's own PIN route, so its 3-strikes lock applies.
+   * Never returns the raw profile (it contains payout details).
+   */
+  async #authPin(login, password) {
     const restaurantId = String(login ?? '').trim();
     const pin = String(password ?? '');
     if (!ID.test(restaurantId) || pin.length < 1 || pin.length > 32) return null;
     const { res, data } = await this.#fetch(`/app/${enc(pin)}/${restaurantId}/`, { service: false });
     if (res.ok) {
       const name = data?.name ?? data?.title ?? data?.restaurant?.name ?? 'Restoran';
-      return { user: { id: restaurantId, name }, restaurant: { id: restaurantId, name } };
+      return { user: { id: restaurantId, login: restaurantId }, restaurant: { id: restaurantId, name } };
     }
     if (res.status === 401 && String(data?.code ?? '').toUpperCase() !== 'PIN_BLOCKED') return null;
     if (res.status === 404 && data?.error === 'Gateway topilmadi') return null; // do not reveal which ids exist

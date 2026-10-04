@@ -7,6 +7,9 @@ export const config = {
   jwtSecret: env('JWT_SECRET'),
   jwtTtl: env('JWT_TTL', '30d'),
   upstreamMode: env('UPSTREAM_MODE', 'mock'),
+  // pin = restaurantId + PIN via the server's PIN route (works today); credentials = the restaurant's own login + password
+  // via POST /app/service/auth/login (needs the main-server endpoint, see README).
+  authMode: env('AUTH_MODE', 'pin'),
   gateway: {
     url: env('API_GATEWAY_URL').replace(/\/+$/, ''),
     password: env('API_GATEWAY_PASSWORD'),
@@ -47,6 +50,7 @@ export function assertConfig(c = config) {
     // lakmago-server refuses the service route unless the key is >= 24 chars (fail-closed), so fail here first.
     if (c.env === 'production' && (c.gateway.password || '').length < 24) errors.push('API_GATEWAY_PASSWORD (servis kaliti, GATEWAY_SERVICE_KEY) kamida 24 belgi bo\'lishi kerak');
   }
+  if (!['pin', 'credentials'].includes(c.authMode)) errors.push('AUTH_MODE: pin yoki credentials bo\'lishi kerak');
   const { delayMinutes, repeatMinutes, maxCount, tickSeconds } = c.reminder;
   if (![delayMinutes, repeatMinutes, maxCount, tickSeconds].every((n) => Number.isFinite(n) && n > 0)) {
     errors.push('REMINDER_* qiymatlari musbat son bo\'lishi kerak');
